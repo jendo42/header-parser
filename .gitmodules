@@ -7,6 +7,3 @@
 [submodule "external/cxxopts"]
 	path = external/cxxopts
 	url = ../../jarro2783/cxxopts.git
-[submodule "external/tclap"]
-	path = external/tclap
-	url = ../../mirror/tclap.git

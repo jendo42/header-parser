@@ -8,15 +8,17 @@
 #include <cstdarg>
 
 namespace {
-  static const char EndOfFileChar = std::char_traits<char>::to_char_type(std::char_traits<char>::eof());
+	static const char EndOfFileChar = std::char_traits<char>::to_char_type(std::char_traits<char>::eof());
 }
 
 //--------------------------------------------------------------------------------------------------
 Tokenizer::Tokenizer() :
-  input_(nullptr),
-  inputLength_(0),
-  cursorPos_(0),
-  cursorLine_(0)
+	input_(nullptr),
+	inputLength_(0),
+	cursorPos_(0),
+	cursorLine_(0),
+	error_(),
+	m_macrosEnabled(true)
 {
 
 }
@@ -28,403 +30,465 @@ Tokenizer::~Tokenizer()
 }
 
 //--------------------------------------------------------------------------------------------------
-void Tokenizer::Reset(const char* input, std::size_t startingLine)
+void Tokenizer::Reset(const char* input, size_t size)
 {
-  input_ = input;
-  inputLength_ = std::char_traits<char>::length(input);
-  cursorPos_ = 0;
-  cursorLine_ = startingLine;
+	input_ = input;
+	inputLength_ = size;
+	cursorPos_ = 0;
+	cursorLine_ = 1;
 }
 
 //--------------------------------------------------------------------------------------------------
-char Tokenizer::GetChar()
-{ 
-	prevCursorPos_ = cursorPos_;
-  prevCursorLine_ = cursorLine_;
+char Tokenizer::GetChar(bool setPrevious)
+{
+	if (setPrevious) {
+		prevCursorPos_ = cursorPos_;
+		prevCursorLine_ = cursorLine_;
+	}
 
-  if(is_eof())
+
+	if(is_eof())
 	{
 		++cursorPos_;	// Do continue so UngetChar does what you think it does
-    return EndOfFileChar;
+		return EndOfFileChar;
 	}
 	
-  char c = input_[cursorPos_];
+	char c = input_[cursorPos_];
 
-  // New line moves the cursor to the new line
-  if(c == '\n')
-    cursorLine_++;
+	if (c == '\r') {
+		++cursorPos_;
+		return GetChar(false);
+	}
 
-  cursorPos_++;
-  return c;
+	// New line moves the cursor to the new line
+	if(c == '\n')
+		cursorLine_++;
+
+	cursorPos_++;
+	return c;
 }
 
 //--------------------------------------------------------------------------------------------------
 void Tokenizer::UngetChar()
 {
-  cursorLine_ = prevCursorLine_;
-  cursorPos_ = prevCursorPos_;
+	cursorLine_ = prevCursorLine_;
+	cursorPos_ = prevCursorPos_;
 }
 
 //--------------------------------------------------------------------------------------------------
 char Tokenizer::peek() const
 {
-  return !is_eof() ?
-            input_[cursorPos_] :
-            EndOfFileChar;
+	return !is_eof() ?
+						input_[cursorPos_] :
+						EndOfFileChar;
 }
 
 //--------------------------------------------------------------------------------------------------
 char Tokenizer::GetLeadingChar()
 {
-  if (!comment_.text.empty())
-    lastComment_ = comment_;
+	if (!comment_.text.empty())
+		lastComment_ = comment_;
 
-  comment_.text = "";
-  comment_.startLine = cursorLine_;
-  comment_.endLine = cursorLine_;
+	comment_.text = "";
+	comment_.startLine = cursorLine_;
+	comment_.endLine = cursorLine_;
 
-  char c;
-  for(c = GetChar(); c != EndOfFileChar; c = GetChar())
-  {
-    // If this is a whitespace character skip it
-    std::char_traits<char>::int_type intc = std::char_traits<char>::to_int_type(c);
+	char c;
+	for(c = GetChar(); c != EndOfFileChar; c = GetChar())
+	{
+		// If this is a whitespace character skip it
+		std::char_traits<char>::int_type intc = std::char_traits<char>::to_int_type(c);
 
-    // In case of a new line
-    if (c == '\n')
-    {
-      if (!comment_.text.empty())
-        comment_.text += "\n";
-      continue;
-    }
+		// In case of a new line
+		if (c == '\n')
+		{
+			if (!comment_.text.empty())
+				comment_.text += "\n";
+			continue;
+		}
 
-    if(std::isspace(intc) || std::iscntrl(intc))
-      continue;
+		if(std::isspace(intc) || std::iscntrl(intc))
+			continue;
 
-    // If this is a single line comment
-    char next = peek();
-    if(c == '/' && next == '/')
-    {
-      std::vector<std::string> lines;
+		// If this is a single line comment
+		char next = peek();
+		if(c == '/' && next == '/')
+		{
+			std::vector<std::string> lines;
 
-      size_t indentationLastLine = 0;
-      while (!is_eof() && c == '/' && next == '/')
-      {
-        // Search for the end of the line
-        std::string line;
-        for (c = GetChar();
-          c != EndOfFileChar && c != '\n';
-          c = GetChar())
-        {
-          line += c;
-        }
-        
-        // Store the line
-        size_t lastSlashIndex = line.find_first_not_of("/");
-        if (lastSlashIndex == std::string::npos)
-          line = "";
-        else
-          line = line.substr(lastSlashIndex);
+			size_t indentationLastLine = 0;
+			while (!is_eof() && c == '/' && next == '/')
+			{
+				// Search for the end of the line
+				std::string line;
+				for (c = GetChar();
+					c != EndOfFileChar && c != '\n';
+					c = GetChar())
+				{
+					line += c;
+				}
+				
+				// Store the line
+				size_t lastSlashIndex = line.find_first_not_of("/");
+				if (lastSlashIndex == std::string::npos)
+					line = "";
+				else
+					line = line.substr(lastSlashIndex);
 
-        size_t firstCharIndex = line.find_first_not_of(" \t");
-        if (firstCharIndex == std::string::npos)
-          line = "";
-        else
-          line = line.substr(firstCharIndex);
+				size_t firstCharIndex = line.find_first_not_of(" \t");
+				if (firstCharIndex == std::string::npos)
+					line = "";
+				else
+					line = line.substr(firstCharIndex);
 
-        if (firstCharIndex > indentationLastLine && !lines.empty())
-          lines.back() += std::string(" ") + line;
-        else
-        {
-          lines.emplace_back(std::move(line));
-          indentationLastLine = firstCharIndex;
-        }
+				if (firstCharIndex > indentationLastLine && !lines.empty())
+					lines.back() += std::string(" ") + line;
+				else
+				{
+					lines.emplace_back(std::move(line));
+					indentationLastLine = firstCharIndex;
+				}
 
-        // Check the next line
-        while (!is_eof() && std::isspace(c = GetChar()));
+				// Check the next line
+				while (!is_eof() && std::isspace(c = GetChar()));
 
-        if (!is_eof())
-          next = peek();
-      }
+				if (!is_eof())
+					next = peek();
+			}
 
-      // Unget previously get char
-      if (!is_eof())
-        UngetChar();
+			// Unget previously get char
+			if (!is_eof())
+				UngetChar();
 
-      // Build comment string
-      std::stringstream ss;
-      for (size_t i = 0; i < lines.size(); ++i)
-      {
-        if (i > 0)
-          ss << "\n";
-        ss << lines[i];
-      }
+			// Build comment string
+			std::stringstream ss;
+			for (size_t i = 0; i < lines.size(); ++i)
+			{
+				if (i > 0)
+					ss << "\n";
+				ss << lines[i];
+			}
 
-      comment_.text = ss.str();
-      comment_.endLine = cursorLine_;
+			comment_.text = ss.str();
+			comment_.endLine = cursorLine_;
 
-      // Go to the next
-      continue;
-    }
+			// Go to the next
+			continue;
+		}
 
-    // If this is a block comment
-    if(c == '/' && next == '*')
-    {
-      // Search for the end of the block comment
-      std::vector<std::string> lines;
-      std::string line;
-      for (c = GetChar(), next = peek();
-        c != EndOfFileChar && (c != '*' || next != '/');
-        c = GetChar(), next = peek())
-      {
-        if (c == '\n')
-        {
-          if (!lines.empty() || !line.empty())
-            lines.emplace_back(line);
-          line.clear();
-        }
-        else
-        {
-          if (!line.empty() || !(std::isspace(c) || c == '*'))
-            line += c;
-        }
-      }
+		// If this is a block comment
+		if(c == '/' && next == '*')
+		{
+			// Search for the end of the block comment
+			std::vector<std::string> lines;
+			std::string line;
+			for (c = GetChar(), next = peek();
+				c != EndOfFileChar && (c != '*' || next != '/');
+				c = GetChar(), next = peek())
+			{
+				if (c == '\n')
+				{
+					if (!lines.empty() || !line.empty())
+						lines.emplace_back(line);
+					line.clear();
+				}
+				else
+				{
+					if (!line.empty() || !(std::isspace(c) || c == '*'))
+						line += c;
+				}
+			}
 
-      // Skip past the slash
-      if(c != EndOfFileChar)
-        GetChar();
+			// Skip past the slash
+			if(c != EndOfFileChar)
+				GetChar();
 
-      // Skip past new lines and spaces
-      while (!is_eof() && std::isspace(c = GetChar()));
-      if (!is_eof())
-        UngetChar();
+			// Skip past new lines and spaces
+			while (!is_eof() && std::isspace(c = GetChar()));
+			if (!is_eof())
+				UngetChar();
 
-      // Remove empty lines from the back
-      while (!lines.empty() && lines.back().empty())
-        lines.pop_back();
+			// Remove empty lines from the back
+			while (!lines.empty() && lines.back().empty())
+				lines.pop_back();
 
-      // Build comment string
-      std::stringstream ss;
-      for (size_t i = 0; i < lines.size(); ++i)
-      {
-        if (i > 0)
-          ss << "\n";
-        ss << lines[i]; 
-      }
+			// Build comment string
+			std::stringstream ss;
+			for (size_t i = 0; i < lines.size(); ++i)
+			{
+				if (i > 0)
+					ss << "\n";
+				ss << lines[i]; 
+			}
 
-      comment_.text = ss.str();
-      comment_.endLine = cursorLine_;
+			comment_.text = ss.str();
+			comment_.endLine = cursorLine_;
 
-      // Move to the next character
-      continue;
-    }
+			// Move to the next character
+			continue;
+		}
 
-    break;
-  }
-  
-  return c;
+		break;
+	}
+	
+	return c;
+}
+
+bool Tokenizer::AddMacro(const std::string_view& macro)
+{
+	return m_macros.emplace(macro).second;
+}
+
+bool Tokenizer::ParseMacro(Token& token)
+{
+	if (token.tokenType != TokenType::kMacro) {
+		return false;
+	}
+
+	//writer_.beginMacro(token.token);
+	if (MatchSymbol("(")) {
+		if (!MatchSymbol(")")) {
+			do
+			{
+				// Parse key value
+				Token keyToken;
+				if (!GetIdentifier(keyToken))
+					return Error("Expected identifier in macro sequence");
+
+				if (!ParseMacro(keyToken)) {
+					//writer_.macroArgument(keyToken.token);
+				}
+			} while (MatchSymbol(","));
+
+			if (!MatchSymbol(")")) {
+				return Error("Expected ')'");
+			}
+		}
+	}
+
+	//writer_.endMacro(token.token);
+
+	return true;
 }
 
 //--------------------------------------------------------------------------------------------------
 bool Tokenizer::GetToken(Token &token, bool angleBracketsForStrings, bool seperateBraces)
 {
-  // Get the next character
-  char c = GetLeadingChar();
-  char p = peek();
-  std::char_traits<char>::int_type intc = std::char_traits<char>::to_int_type(c);
-  std::char_traits<char>::int_type intp = std::char_traits<char>::to_int_type(p);
+	// Get the next character
+	char c = GetLeadingChar();
+	char p = peek();
+	std::char_traits<char>::int_type intc = std::char_traits<char>::to_int_type(c);
+	std::char_traits<char>::int_type intp = std::char_traits<char>::to_int_type(p);
 
-  if(c == EndOfFileChar)
-  {
-    UngetChar();
-    return false;
-  }
+	if(c == EndOfFileChar)
+	{
+		UngetChar();
+		return false;
+	}
 
-  // Record the start of the token position
-  token.startPos = prevCursorPos_;
-  token.startLine = prevCursorLine_;
-  token.token.clear();
-  token.tokenType = TokenType::kNone;
+	// Record the start of the token position
+	token.startPos = prevCursorPos_;
+	token.startLine = prevCursorLine_;
+	token.token = std::string_view();
+	token.tokenType = TokenType::kNone;
 
-  // Alphanumeric token
-  if(std::isalpha(intc) || c == '_')
-  {
-    // Read the rest of the alphanumeric characters
-    do
-    {
-      token.token.push_back(c);
-      c = GetChar();
-      intc = std::char_traits<char>::to_int_type(c);
-    } while(std::isalnum(intc) || c == '_');
+	// Alphanumeric token
+	if(std::isalpha(intc) || c == '_')
+	{
+		// Read the rest of the alphanumeric characters
+		do
+		{
+			c = GetChar();
+			intc = std::char_traits<char>::to_int_type(c);
+		} while(std::isalnum(intc) || c == '_');
 
-    // Put back the last read character since it's not part of the identifier
-    UngetChar();
+		// Put back the last read character since it's not part of the identifier
+		UngetChar();
+		
+		token.token = std::string_view(input_ + token.startPos, cursorPos_ - token.startPos);
 
-    // Set the type of the token
-    token.tokenType = TokenType::kIdentifier;
+		// Set the type of the token
+		token.tokenType = TokenType::kIdentifier;
 
-    if(token.token == "true")
-    {
-      token.tokenType = TokenType::kConst;
-      token.constType = ConstType::kBoolean;
-      token.boolConst = true;
-    }
-    else if(token.token == "false")
-    {
-      token.tokenType = TokenType::kConst;
-      token.constType = ConstType::kBoolean;
-      token.boolConst = false;
-    }
+		if(token.token == "true")
+		{
+			token.tokenType = TokenType::kConst;
+			token.constType = ConstType::kBoolean;
+			token.boolConst = true;
+		}
+		else if(token.token == "false")
+		{
+			token.tokenType = TokenType::kConst;
+			token.constType = ConstType::kBoolean;
+			token.boolConst = false;
+		}
+		else if (m_macrosEnabled && m_macros.find(std::string(token.token)) != m_macros.cend())
+		{
+			token.tokenType = TokenType::kMacro;
+			if (!ParseMacro(token)) {
+				return Error("Invalid syntax");
+			}
 
-    return true;
-  }
-  // Constant
-  else if(std::isdigit(intc) || ((c == '-' || c == '+') && std::isdigit(intp)))
-  {
-    bool isFloat = false;
-    bool isHex = false;
-    bool isNegated = c == '-';
-    do
-    {
-      if(c == '.')
-        isFloat = true;
+			GetToken(token);
+		}
 
-      if(c == 'x' || c == 'X')
-        isHex = true;
+		return true;
+	}
+	// Constant
+	else if(std::isdigit(intc) || ((c == '-' || c == '+') && std::isdigit(intp)))
+	{
+		bool isFloat = false;
+		bool isHex = false;
+		bool isNegated = c == '-';
+		const char* start = input_ + cursorPos_;
+		size_t size = 0;
+		do
+		{
+			if(c == '.')
+				isFloat = true;
 
-      token.token.push_back(c);
-      c = GetChar();
-      intc = std::char_traits<char>::to_int_type(c);
+			if(c == 'x' || c == 'X')
+				isHex = true;
 
-    } while(std::isdigit(intc) ||
-        (!isFloat && c == '.') ||
-        (!isHex && (c == 'X' || c == 'x')) ||
-        (isHex && std::isxdigit(intc)));
+			c = GetChar();
+			intc = std::char_traits<char>::to_int_type(c);
 
-    if(!isFloat || (c != 'f' && c != 'F'))
-      UngetChar();
+			++size;
 
-    token.tokenType = TokenType::kConst;
-    if(!isFloat)
-    {
-      try
-      {
-        if(isNegated)
-        {
-          token.int32Const = std::stoi(token.token, 0, 0);
-          token.constType = ConstType::kInt32;
-        }
-        else
-        {
-          token.uint32Const = std::stoul(token.token, 0, 0);
-          token.constType = ConstType::kUInt32;
-        }
-      }
-      catch(std::out_of_range)
-      {
-        if(isNegated)
-        {
-          token.int64Const = std::stoll(token.token, 0, 0);
-          token.constType = ConstType::kInt64;
-        }
-        else
-        {
-          token.uint64Const = std::stoull(token.token, 0, 0);
-          token.constType = ConstType::kUInt64;
-        }
-      }
-    }
-    else
-    {
-      token.realConst = std::stod(token.token);
-      token.constType = ConstType::kReal;
-    }
+		} while(std::isdigit(intc) ||
+				(!isFloat && c == '.') ||
+				(!isHex && (c == 'X' || c == 'x')) ||
+				(isHex && std::isxdigit(intc)));
 
-    return true;
-  }
-  else if (c == '"' || (angleBracketsForStrings && c == '<'))
-  {
-    const char closingElement = c == '"' ? '"' : '>';
+		if(!isFloat || (c != 'f' && c != 'F'))
+			UngetChar();
 
-    c = GetChar();
-    while (c != closingElement && std::char_traits<char>::not_eof(std::char_traits<char>::to_int_type(c)))
-    {
-      if(c == '\\')
-      {
-        c = GetChar();
-        if(!std::char_traits<char>::not_eof(std::char_traits<char>::to_int_type(c)))
-          break;
-        else if(c == 'n')
-          c = '\n';
-        else if(c == 't')
-          c = '\t';
-        else if(c == 'r')
-          c = '\r';
-        else if(c == '"')
-          c = '"';
-      }
+		token.token = std::string_view(input_ + token.startPos, cursorPos_ - token.startPos);
+		token.tokenType = TokenType::kConst;
+		if(!isFloat)
+		{
+			try
+			{
+				if(isNegated)
+				{
+					token.int32Const = std::stoi(std::string(token.token), 0, 0);
+					token.constType = ConstType::kInt32;
+				}
+				else
+				{
+					token.uint32Const = std::stoul(std::string(token.token), 0, 0);
+					token.constType = ConstType::kUInt32;
+				}
+			}
+			catch(std::out_of_range)
+			{
+				if(isNegated)
+				{
+					token.int64Const = std::stoll(std::string(token.token), 0, 0);
+					token.constType = ConstType::kInt64;
+				}
+				else
+				{
+					token.uint64Const = std::stoull(std::string(token.token), 0, 0);
+					token.constType = ConstType::kUInt64;
+				}
+			}
+		}
+		else
+		{
+			token.realConst = std::stod(std::string(token.token));
+			token.constType = ConstType::kReal;
+		}
 
-      token.token.push_back(c);
-      c = GetChar();
-    }
+		return true;
+	}
+	else if (c == '"' || (angleBracketsForStrings && c == '<'))
+	{
+		const char closingElement = c == '"' ? '"' : '>';
 
-    if (c != closingElement)
-      UngetChar();
+		c = GetChar();
+		while (c != closingElement && std::char_traits<char>::not_eof(std::char_traits<char>::to_int_type(c)))
+		{
+			if(c == '\\')
+			{
+				c = GetChar();
+				if(!std::char_traits<char>::not_eof(std::char_traits<char>::to_int_type(c)))
+					break;
+				else if(c == 'n')
+					c = '\n';
+				else if(c == 't')
+					c = '\t';
+				else if(c == 'r')
+					c = '\r';
+				else if(c == '"')
+					c = '"';
+			}
 
-    token.tokenType = TokenType::kConst;
-    token.constType = ConstType::kString;
-    token.stringConst = token.token;
+			c = GetChar();
+		}
 
-    return true;
-  }
-  // Symbol
-  else
-  {
-    // Push back the symbol
-    token.token.push_back(c);
+		if (c != closingElement)
+			UngetChar();
 
-    #define PAIR(cc,dd) (c==cc&&d==dd) /* Comparison macro for two characters */
-    const char d = GetChar();
-    if(PAIR('<', '<') ||
-       PAIR('-', '>') ||
-       (!seperateBraces && PAIR('>', '>')) ||
-       PAIR('!', '=') ||
-       PAIR('<', '=') ||
-       PAIR('>', '=') ||
-       PAIR('+', '+') ||
-       PAIR('-', '-') ||
-       PAIR('+', '=') ||
-       PAIR('-', '=') ||
-       PAIR('*', '=') ||
-       PAIR('/', '=') ||
-       PAIR('^', '=') ||
-       PAIR('|', '=') ||
-       PAIR('&', '=') ||
-       PAIR('~', '=') ||
-       PAIR('%', '=') ||
-       PAIR('&', '&') ||
-       PAIR('|', '|') ||
-       PAIR('=', '=') ||
-       PAIR(':', ':')
-      )
-    #undef PAIR
-    {
-      token.token.push_back(d);
-    }
-    else
-      UngetChar();
+		token.token = std::string_view(input_ + token.startPos + 1, cursorPos_ - token.startPos - 2);
+		token.tokenType = TokenType::kConst;
+		token.constType = ConstType::kString;
+		token.stringConst = std::string(token.token);
 
-    token.tokenType = TokenType::kSymbol;
+		return true;
+	}
+	// Symbol
+	else
+	{
+		// Push back the symbol
+		#define PAIR(cc,dd) (c==cc&&d==dd) /* Comparison macro for two characters */
+		const char d = GetChar();
+		if(PAIR('<', '<') ||
+			 PAIR('-', '>') ||
+			 (!seperateBraces && PAIR('>', '>')) ||
+			 PAIR('!', '=') ||
+			 PAIR('<', '=') ||
+			 PAIR('>', '=') ||
+			 PAIR('+', '+') ||
+			 PAIR('-', '-') ||
+			 PAIR('+', '=') ||
+			 PAIR('-', '=') ||
+			 PAIR('*', '=') ||
+			 PAIR('/', '=') ||
+			 PAIR('^', '=') ||
+			 PAIR('|', '=') ||
+			 PAIR('&', '=') ||
+			 PAIR('~', '=') ||
+			 PAIR('%', '=') ||
+			 PAIR('&', '&') ||
+			 PAIR('|', '|') ||
+			 PAIR('=', '=') ||
+			 PAIR(':', ':') ||
+			 PAIR('.', '.')
+			)
+		#undef PAIR
+		{
+			const char e = GetChar();
+			if (e != '.') {
+				UngetChar();
+			}
+		}
+		else
+			UngetChar();
 
-    return true;
-  }
+		token.tokenType = TokenType::kSymbol;
+		token.token = std::string_view(input_ + token.startPos, cursorPos_ - token.startPos);
 
-  return false;
+		return true;
+	}
+
+	return false;
 }
 
 //--------------------------------------------------------------------------------------------------
 bool Tokenizer::is_eof() const
 {
-  return cursorPos_ >= inputLength_;
+	return cursorPos_ >= inputLength_;
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -443,78 +507,90 @@ bool Tokenizer::GetConst(Token &token)
 //--------------------------------------------------------------------------------------------------
 bool Tokenizer::GetIdentifier(Token &token)
 {
-  if(!GetToken(token))
-    return false;
+	if(!GetToken(token))
+		return false;
 
-  if(token.tokenType == TokenType::kIdentifier)
-    return true;
+	if(token.tokenType == TokenType::kIdentifier)
+		return true;
 
-  UngetToken(token);
-  return false;
+	UngetToken(token);
+	return false;
 }
 
 //--------------------------------------------------------------------------------------------------
 void Tokenizer::UngetToken(const Token &token)
 {
-  cursorLine_ = token.startLine;
-  cursorPos_ = token.startPos;
+	cursorLine_ = token.startLine;
+	cursorPos_ = token.startPos;
+}
+
+std::string_view Tokenizer::GetError()
+{
+	return error_;
 }
 
 //--------------------------------------------------------------------------------------------------
-bool Tokenizer::MatchIdentifier(const char *identifier)
+bool Tokenizer::MatchIdentifier(const std::string_view &identifier)
 {
-  Token token;
-  if(GetToken(token))
-  {
-    if(token.tokenType == TokenType::kIdentifier && token.token == identifier)
-      return true;
+	Token token;
+	if(GetToken(token))
+	{
+		if(token.tokenType == TokenType::kIdentifier && token.token == identifier)
+			return true;
 
-    UngetToken(token);
-  }
+		UngetToken(token);
+	}
 
-  return false;
+	return false;
 }
 
 //--------------------------------------------------------------------------------------------------
-bool Tokenizer::MatchSymbol(const char *symbol)
+bool Tokenizer::MatchSymbol(const std::string_view& symbol)
 {
-  Token token;
-  if(GetToken(token, false, std::char_traits<char>::length(symbol) == 1 && symbol[0] == '>'))
-  {
-    if(token.tokenType == TokenType::kSymbol && token.token == symbol)
-      return true;
+	Token token;
+	if(GetToken(token, false, symbol.length() == 1 && symbol[0] == '>'))
+	{
+		if(token.tokenType == TokenType::kSymbol && token.token == symbol)
+			return true;
 
-    UngetToken(token);
-  }
+		UngetToken(token);
+	}
 
-  return false;
+	return false;
 }
 
 //--------------------------------------------------------------------------------------------------
-bool Tokenizer::RequireIdentifier(const char *identifier)
+bool Tokenizer::RequireIdentifier(const std::string_view& identifier)
 {
-  if(!MatchIdentifier(identifier))
-    return Error("Missing identifier %s", identifier);
-  return true;
+	if(!MatchIdentifier(identifier))
+		return Error("Expected '%.*s'", identifier.length(), identifier.data());
+	return true;
 }
 
 //--------------------------------------------------------------------------------------------------
-bool Tokenizer::RequireSymbol(const char *symbol)
+bool Tokenizer::RequireSymbol(const std::string_view& symbol)
 {
-  if (!MatchSymbol(symbol))
-    return Error("Missing symbol %s", symbol);
-  return true;
+	if (!MatchSymbol(symbol))
+		return Error("Expected '%.*s'", symbol.length(), symbol.data());
+	return true;
+}
+
+void Tokenizer::SetMacroParsing(bool enabled)
+{
+	m_macrosEnabled = enabled;
 }
 
 //-------------------------------------------------------------------------------------------------
 bool Tokenizer::Error(const char* fmt, ...)
 {
-  char buffer[512];
-  va_list args;
-  va_start(args, fmt);
-  vsnprintf(buffer, 512, fmt, args);
-  va_end(args);
-  printf("ERROR: %d:%d: %s", static_cast<int>(cursorLine_), 0, buffer);
-  hasError_ = true;
-  return false;
+	va_list args;
+	char buffer[512];
+	std::ostringstream str;
+	va_start(args, fmt);
+	vsnprintf(buffer, 512, fmt, args);
+	str << "ParserError: " << (int)cursorLine_ << ":0: " << buffer;
+	error_ = str.str();
+	hasError_ = true;
+	va_end(args);
+	return false;
 }

@@ -1,96 +1,82 @@
 #pragma once
 
 #include "tokenizer.h"
-#include "options.h"
 #include "type_node.h"
 #include <string>
-#include <rapidjson/prettywriter.h>
-#include <rapidjson/stringbuffer.h>
+#include <unordered_set>
+#include <deque>
 
-enum class ScopeType
-{
-  kGlobal,
-  kNamespace,
-  kClass
-};
-
-enum class AccessControlType 
-{
-  kPublic,
-  kPrivate,
-  kProtected
-};
+#include "parser_interface.h"
 
 class Parser : private Tokenizer
 {
 public:
-  Parser(const Options& options);
-  virtual ~Parser();
+	Parser(ParserInterface &interface);
+	virtual ~Parser();
 
-  // No copying of parser
-  Parser(const Parser& other) = delete;
-  Parser(Parser&& other) = delete;
+	// No copying of parser
+	Parser(const Parser& other) = delete;
+	Parser(Parser&& other) = delete;
 
-  // Parses the given input
-  bool Parse(const char* input);
+	// Parses the given input
+	bool Parse(const std::string_view& fileName, const std::string_view &input);
 
-  /// Returns the result of a previous parse
-  std::string result() const { return std::string(buffer_.GetString(), buffer_.GetString() + buffer_.GetSize()); }
+	void SetInterface(ParserInterface& interface);
+
+	using Tokenizer::GetError;
+	using Tokenizer::AddMacro;
 
 protected:
-  /// Called to parse the next statement. Returns false if there are no more statements.
-  bool ParseStatement();
-  bool ParseDeclaration(Token &token);
-  bool ParseDirective();
-  bool SkipDeclaration(Token &token);
-  bool ParseProperty(Token &token);
-  bool ParseEnum(Token &token);
-  bool ParseMacroMeta();
-  bool ParseMetaSequence();
+	struct Scope
+	{
+		ScopeType type;
+		std::string_view name;
+		AccessControlType currentAccessControlType;
+	};
 
-  void PushScope(const std::string& name, ScopeType scopeType, AccessControlType accessControlType);
-  void PopScope();
+	/// Called to parse the next statement. Returns false if there are no more statements.
+	bool ParseBaseType(Token &baseType);
+	SignednessSpecifier ParseSignednessSpecifier();
+	SizeSpecifier ParseSizeSpecifier();
+	bool ParseStatement();
+	bool ParseDeclaration(Token &token);
+	bool ParseDirective();
+	bool SkipDeclaration(Token &token);
+	bool ParseProperty(Token &token, bool isTypedef = false, bool skipType = false);
+	bool ParseEnum(Token &token);
+	bool ParseUsing(Token &token);
+	bool ParseFriend(Token& token);
 
-  bool ParseNamespace();
-  bool ParseAccessControl(const Token& token, AccessControlType& type);
+	void PushScope(const std::string_view& name, ScopeType scopeType, AccessControlType accessControlType);
+	void PopScope();
 
-  AccessControlType current_access_control_type() const { return topScope_->currentAccessControlType; }
-  void WriteCurrentAccessControlType();
+	bool ParseNamespace();
+	bool ParseAccessControl(const Token& token, AccessControlType& type);
 
-  void WriteAccessControlType(AccessControlType type);
-  bool ParseClass(Token &token);
-  bool ParseClassTemplate();
-  bool ParseFunction(Token &token, const std::string& macroName);
-  bool ParseConstructor(Token& token);
+	AccessControlType GetCurrentAccessControlType() const;
+	void WriteCurrentAccessControlType();
 
-  bool ParseComment();
+	void WriteAccessControlType(AccessControlType type);
+	bool ParseClass(Token &token);
+	bool ParseTemplate();
+	bool ParseFunction(Token &token, const Scope *scope);
+	TypeNode::Type PeekConstructor(const std::string_view& scopeName);
 
-  bool ParseType();
+	bool ParseComment();
 
-  std::unique_ptr<TypeNode> ParseTypeNode();
-  std::string ParseTypeNodeDeclarator();
+	bool ParseType(TypeNode::Type *type = nullptr, bool visit = true, const std::string_view& constructorName = std::string_view(), std::string_view *outName = nullptr, bool inTemplate = false);
 
-  std::string ParseTypename();
+	std::unique_ptr<TypeNode> ParseTypeNode(const std::string_view& constructorName, bool inTemplate = false);
+	bool ParseTypeNodeDeclarator(std::string &declarator, const std::string_view& constructorName, bool checkSpecifier = true);
 
-  void WriteToken(const Token &token);
-  bool ParseCustomMacro(Token & token, const std::string& macroName);
+	//void WriteToken(const Token &token);
 
 private:
-  Options options_;
-  rapidjson::StringBuffer buffer_;
-  rapidjson::PrettyWriter<rapidjson::StringBuffer> writer_;
+	ParserInterface& writer_;
 
-  struct Scope
-  {
-    ScopeType type;
-    std::string name;
-    AccessControlType currentAccessControlType;
-  };
+	std::deque<Scope> scopes_;
+	unsigned m_unnamedCnt;
 
-  Scope scopes_[64];
-  Scope *topScope_;
-
-    bool ParseClassTemplateArgument();
+	bool ParseTemplateArgument();
+	std::string GenerateUnnamedIdentifier(const std::string_view &name);
 };
-
-
